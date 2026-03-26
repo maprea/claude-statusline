@@ -2,15 +2,15 @@
 #
 # Claude Code Status Line Display
 # ================================
-# Reads calculator cache + Claude Code stdin JSON to render status bar.
+# Reads Claude Code stdin JSON to render status bar.
 #
 # Features:
 # - Current model
 # - Session tokens (input/output/total)
-# - 5hr window progress bar + percentage
-# - Time to window reset (remaining + absolute)
-# - Weekly quota percentage
-# - Weekly quota percentage
+# - 5hr window progress bar + percentage + time to reset
+# - Weekly quota percentage + time to reset
+# - Context window usage percentage
+# - Effort level (L/M/H/⚡)
 #
 # Colors: Designed for dark terminals, sober palette
 #
@@ -242,11 +242,7 @@ main() {
     
     session_total=$(( session_input + session_output ))
     
-    # Current session ID
-    local session_id
-    session_id=$(jq_safe "$stdin_json" '.session_id' '')
-    
-    # Context window info
+    # Context window usage
     local context_pct
     context_pct=$(jq_safe "$stdin_json" '.context_window.used_percentage' '0')
     [[ "$context_pct" == "null" ]] && context_pct=0
@@ -264,11 +260,13 @@ main() {
     weekly_pct=$(jq_safe "$stdin_json" '.rate_limits.seven_day.used_percentage' '')
     weekly_reset_ts=$(jq_safe "$stdin_json" '.rate_limits.seven_day.resets_at' '')
 
-    # Calculate time remaining from reset timestamp
+    # Get current time once for all calculations
+    local now_ts
+    now_ts=$(date +%s)
+
+    # Calculate window time remaining
     local window_remaining=0
     if [[ -n "$window_reset_ts" && "$window_reset_ts" != "null" ]]; then
-        local now_ts
-        now_ts=$(date +%s)
         window_remaining=$(( window_reset_ts - now_ts ))
         (( window_remaining < 0 )) && window_remaining=0
         window_active="true"
@@ -276,11 +274,31 @@ main() {
         window_active="false"
     fi
 
-    # Truncate percentage to integer
+    # Calculate weekly time remaining
+    local weekly_remaining=0
+    local weekly_active="false"
+    if [[ -n "$weekly_reset_ts" && "$weekly_reset_ts" != "null" ]]; then
+        weekly_remaining=$(( weekly_reset_ts - now_ts ))
+        (( weekly_remaining < 0 )) && weekly_remaining=0
+        weekly_active="true"
+    fi
+
+    # Truncate percentages to integer
     [[ -z "$window_pct" || "$window_pct" == "null" ]] && window_pct=0
     window_pct=${window_pct%%.*}
     [[ -z "$weekly_pct" || "$weekly_pct" == "null" ]] && weekly_pct=0
     weekly_pct=${weekly_pct%%.*}
+
+    # Context window percentage (truncate to integer)
+    local context_pct_int
+    context_pct_int=${context_pct%%.*}
+
+    # Effort level
+    local effort_level
+    effort_level=$(jq_safe "$stdin_json" '.effort_level' '')
+    if [[ -z "$effort_level" || "$effort_level" == "null" ]]; then
+        effort_level="medium"
+    fi
     
     # ========================================================================
     # Build output line
@@ -288,10 +306,18 @@ main() {
     
     local output=""
     
-    # 1. Model
-    output+="${FG_CYAN}${BOLD}${model_display}${RST}"
+    # 1. Model + Project
+    local cwd_name
+    cwd_name=$(jq_safe "$stdin_json" '.cwd' '')
+    if [[ -n "$cwd_name" && "$cwd_name" != "null" ]]; then
+        cwd_name="${cwd_name##*/}"
+    else
+        cwd_name="$(basename "$PWD")"
+    fi
+    output+="${FG_CYAN}${BOLD}[${model_display}]${RST}"
+    output+=" ${FG_GRAY}📁 ${cwd_name}${RST}"
     output+=" ${SEP} "
-    
+
     # 2. Session tokens (input/output/total)
     local session_in_fmt session_out_fmt session_tot_fmt
     session_in_fmt=$(format_tokens "$session_input")
@@ -322,11 +348,37 @@ main() {
     fi
     output+=" ${SEP} "
     
-    # 4. Weekly percentage
+    # 4. Weekly percentage + time
     local weekly_pct_color
     weekly_pct_color=$(get_pct_color "$weekly_pct")
     output+="${FG_GRAY}wk:${RST}${weekly_pct_color}${weekly_pct}%${RST}"
-    
+
+    if [[ "$weekly_active" == "true" ]]; then
+        local weekly_time_str
+        weekly_time_str=$(format_time_remaining "$weekly_remaining")
+        local weekly_abs_str
+        weekly_abs_str=$(format_absolute_time "$weekly_reset_ts")
+        output+=" ${FG_GRAY}(${weekly_time_str}→${weekly_abs_str})${RST}"
+    fi
+    output+=" ${SEP} "
+
+    # 5. Context window usage
+    local ctx_color
+    ctx_color=$(get_pct_color "$context_pct_int")
+    output+="${FG_GRAY}ctx:${RST}${ctx_color}${context_pct_int}%${RST}"
+    output+=" ${SEP} "
+
+    # 6. Effort level
+    local effort_short effort_color
+    case "$effort_level" in
+        "low")    effort_short="L";  effort_color="$FG_GRAY" ;;
+        "medium") effort_short="M";  effort_color="$FG_BLUE" ;;
+        "high")   effort_short="H";  effort_color="$FG_ORANGE" ;;
+        "max")    effort_short="⚡"; effort_color="$FG_RED" ;;
+        *)        effort_short="?";  effort_color="$FG_GRAY" ;;
+    esac
+    output+="${effort_color}${effort_short}${RST}"
+
     # Print the line
     printf '%b\n' "$output"
 }

@@ -1,105 +1,68 @@
 # Claude Code Status Line
 
-A beautiful, sober status bar for Claude Code that displays comprehensive usage metrics.
+A sober status bar for Claude Code that displays real-time usage metrics using server-side rate limit data.
 
-![Dark Terminal Theme](https://img.shields.io/badge/Theme-Dark%20Terminal-333?style=flat-square)
 ![Shell](https://img.shields.io/badge/Shell-Bash-4EAA25?style=flat-square)
-![Python](https://img.shields.io/badge/Python-3.8+-3776AB?style=flat-square)
+![Dark Terminal Theme](https://img.shields.io/badge/Theme-Dark%20Terminal-333?style=flat-square)
 
 ## Features
 
 | Feature | Description |
 |---------|-------------|
-| **Current Model** | Shows the active Claude model (Opus, Sonnet, Haiku) |
-| **Session Tokens** | Input (↓), Output (↑), and Total (Σ) tokens for current session |
-| **5hr Window** | Progress bar with percentage and time to reset |
-| **Weekly Quota** | Percentage of weekly quota used |
-| **Mode** | Current mode (⏸ plan, ⏵⏵ accept edits, ● normal) |
+| **Current Model** | Active Claude model (Opus, Sonnet, Haiku) |
+| **Project Folder** | Current working directory name |
+| **Session Tokens** | Input (↓), Output (↑), and Total (Σ) for current session |
+| **5hr Window** | Progress bar + percentage + time to reset (relative and absolute) |
+| **Weekly Quota** | Percentage + time to reset (relative and absolute) |
+| **Context Window** | Context usage percentage |
 | **Effort Level** | Thinking effort (L/M/H/⚡) |
+| **Cold Start Metrics** | Shows last-known metrics when Claude Code starts before receiving new data |
 
 ## Screenshot
 
 ```
-Opus │ ↓12.3K·↑8.4K·Σ20.7K │ 5h:▓▓▓▓░░░░  42% (2h15m→14:30) │ wk:23% │ ⏵⏵ │ H
+[Opus] 📁 claude-statusline │ ↓0·↑0·Σ0 │ 5h:▓▓░░░░░░  30% (3h29m→04:33) │ wk:43% (4d3h→05:00) │ ctx:15% │ H
 ```
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                      Claude Code                                 │
-│                          │                                       │
-│                    stdin (JSON)                                  │
-│                          ▼                                       │
-│  ┌────────────────────────────────────────────────────────────┐ │
-│  │                  statusline.sh                              │ │
-│  │  • Reads stdin JSON from Claude Code                        │ │
-│  │  • Checks cache freshness (< 20s)                          │ │
-│  │  • Triggers calculator if cache is stale                    │ │
-│  │  • Pipes to display script                                  │ │
-│  └────────────────────────────────────────────────────────────┘ │
-│                          │                                       │
-│         ┌────────────────┴────────────────┐                     │
-│         ▼                                 ▼                      │
-│  ┌──────────────┐              ┌─────────────────────┐          │
-│  │ usage_cache  │◄─────────────│ claude_usage_calc.py│          │
-│  │    .json     │              │                     │          │
-│  └──────────────┘              │ • Parses JSONL logs │          │
-│         │                      │ • Per-session usage │          │
-│         │                      │ • Window boundaries │          │
-│         │                      │ • Weekly aggregates │          │
-│         ▼                      └─────────────────────┘          │
-│  ┌──────────────────────┐              ▲                        │
-│  │ statusline_display.sh│              │                        │
-│  │                      │       ┌──────┴──────┐                 │
-│  │ • Formats output     │       │ calc_daemon │                 │
-│  │ • ANSI colors        │       │ (optional)  │                 │
-│  │ • Progress bars      │       │ runs @15s   │                 │
-│  └──────────────────────┘       └─────────────┘                 │
-│              │                                                   │
-│              ▼                                                   │
-│        [Status Bar]                                              │
-└─────────────────────────────────────────────────────────────────┘
+Claude Code (stdin JSON with rate_limits) → statusline.sh → statusline_display.sh → [ANSI status bar]
 ```
+
+Rate limit percentages (`five_hour`, `seven_day`) come directly from Claude Code's stdin JSON — authoritative server-side data, no estimation or local calculation needed.
 
 ## Installation
 
 ### Prerequisites
 
-- **Python 3.8+**
-- **jq** - JSON processor
-- **bc** - Calculator (for formatting)
+- **jq** — JSON processor
+- **bc** — calculator (for token formatting)
 
 ```bash
 # macOS
-brew install jq bc python3
+brew install jq bc
 
 # Ubuntu/Debian
-sudo apt-get install jq bc python3
+sudo apt-get install jq bc
 
 # Fedora/RHEL
-sudo dnf install jq bc python3
+sudo dnf install jq bc
 ```
 
 ### Quick Install
 
 ```bash
-# Clone or download the files
-cd /path/to/statusline
-
-# Run setup
+git clone <repo-url> && cd claude-statusline
 ./setup.sh
-
-# With background daemon (recommended for accuracy)
-./setup.sh --daemon
 ```
 
 ### Manual Install
 
-1. Copy files to `~/.claude/statusline/`:
+1. Copy scripts:
    ```bash
    mkdir -p ~/.claude/statusline
-   cp *.sh *.py ~/.claude/statusline/
+   cp statusline.sh statusline_display.sh ~/.claude/statusline/
    chmod +x ~/.claude/statusline/*.sh
    ```
 
@@ -115,91 +78,25 @@ cd /path/to/statusline
 
 3. Restart Claude Code
 
-## Configuration
-
-### Status Line Settings
-
-The status line is configured in `~/.claude/settings.json`:
-
-```json
-{
-  "statusLine": {
-    "type": "command",
-    "command": "~/.claude/statusline/statusline.sh",
-    "padding": 0
-  }
-}
-```
-
-### Background Daemon
-
-For more accurate cumulative tracking, run the calculator daemon:
-
-```bash
-# Start daemon (runs every 15 seconds)
-~/.claude/statusline/calc_daemon.sh start
-
-# Check status
-~/.claude/statusline/calc_daemon.sh status
-
-# Stop daemon
-~/.claude/statusline/calc_daemon.sh stop
-```
-
-#### macOS (launchd)
-
-```bash
-./setup.sh --daemon
-# Creates ~/Library/LaunchAgents/com.claude.usage-calc.plist
-```
-
-#### Linux (systemd)
-
-```bash
-./setup.sh --daemon
-# Creates ~/.config/systemd/user/claude-usage-calc.timer
-```
-
 ## How It Works
 
-### Per-Session Tracking
+### Project Folder
+Displays the current working directory name, sourced from `cwd` in Claude Code's stdin JSON.
 
-Each Claude Code terminal gets its own session with a unique UUID. The calculator parses:
+### Session Tokens
+Comes from `context_window.total_input_tokens` and `total_output_tokens` in Claude Code's stdin JSON. Real-time and accurate.
 
-```
-~/.claude/projects/<project-path>/<session-uuid>.jsonl
-```
+### 5-Hour Window & Weekly Quota
+Read from `rate_limits.five_hour` and `rate_limits.seven_day` in Claude Code's stdin JSON. These are server-side percentages that match exactly what the Claude web UI shows. Available after the first API response in a session.
 
-Session tokens shown in the status bar come directly from Claude Code's stdin JSON (real-time, accurate).
+### Context Window
+Read from `context_window.used_percentage` — how much of the model's context window is in use.
 
-### Window Detection (5-hour)
+### Effort Level
+Read from `effort_level` in stdin JSON. Falls back to "medium" if not available.
 
-The 5-hour window is auto-detected by analyzing activity patterns:
-
-1. Parse all session JSONL files
-2. Group messages by timestamp
-3. Detect gaps > 5 hours (new window starts)
-4. Calculate remaining time to current window end
-
-**No manual configuration needed** - windows are detected from actual usage.
-
-### Weekly Quota
-
-Similar to window detection:
-
-1. Analyze past 7 days of activity
-2. Sum all tokens across all sessions
-3. Estimate percentage based on plan limits
-
-### Plan Limits
-
-Estimated limits (actual limits vary by plan and are not exposed by API):
-
-| Plan | 5hr Window | Weekly |
-|------|-----------|--------|
-| Pro | ~400K tokens | ~3M tokens |
-| Max5 | ~10M tokens | ~50M tokens |
-| Max20 | ~40M tokens | ~200M tokens |
+### Cold Start Metrics
+When Claude Code starts a new session, the status line automatically caches the last received rate limits and effort level to `~/.claude/statusline/.last_metrics.json`. When Claude Code hasn't received new data yet (before the first API response), the display merges the cached values into the output, so you see the previous session's metrics instead of 0%/(inactive). Once the first API response arrives with current rate limit data, that takes precedence and the cache is updated.
 
 ## Customization
 
@@ -208,7 +105,6 @@ Estimated limits (actual limits vary by plan and are not exposed by API):
 Edit `statusline_display.sh` to change the color palette:
 
 ```bash
-# Current sober dark theme
 FG_CYAN='\033[38;5;80m'
 FG_BLUE='\033[38;5;75m'
 FG_GREEN='\033[38;5;114m'
@@ -219,65 +115,25 @@ FG_RED='\033[38;5;174m'
 
 ### Progress Bar
 
-Adjust bar width and thresholds:
-
 ```bash
-# In statusline_display.sh
-render_progress_bar "$window_pct" 8  # width=8 characters
+# Width (default 8 characters)
+render_progress_bar "$window_pct" 8
 
-# Threshold colors
-get_pct_color() {
-    if (( pct < 50 )); then  # Green below 50%
-    elif (( pct < 75 )); then  # Yellow 50-75%
-    elif (( pct < 90 )); then  # Orange 75-90%
-    else  # Red above 90%
-}
-```
-
-### Cache Refresh
-
-Adjust how often the calculator runs:
-
-```bash
-# In calc_daemon.sh
-REFRESH_INTERVAL=15  # seconds
-
-# In statusline.sh
-CACHE_MAX_AGE=20  # seconds before triggering inline calculation
+# Color thresholds: green <50%, yellow 50-75%, orange 75-90%, red >90%
 ```
 
 ## Troubleshooting
 
 ### Status line not showing
-
 1. Accept workspace trust dialog when Claude Code prompts
-2. Check script permissions: `chmod +x ~/.claude/statusline/*.sh`
-3. Test manually: `echo '{}' | ~/.claude/statusline/statusline.sh`
+2. Check permissions: `chmod +x ~/.claude/statusline/*.sh`
+3. Test: `echo '{}' | ~/.claude/statusline/statusline.sh`
 
-### Blank or `--` values
+### 0% / (inactive) for rate limits
+Before the first API response in a session, the display shows cached metrics from the last session. After Claude Code receives its first response, current rate limits appear. If you want to clear the cache, delete `~/.claude/statusline/.last_metrics.json`.
 
-- Normal before first API response completes
-- Check if JSONL files exist: `ls ~/.claude/projects/`
-- Run calculator manually: `~/.claude/statusline/calc_daemon.sh run -v`
-
-### Context percentage differs from /context
-
-- Status line uses `used_percentage` from stdin JSON
-- `/context` command calculates at different times
-- Both are accurate, just measured at different moments
-
-### Debug mode
-
-```bash
-# Verbose calculator output
-python3 ~/.claude/statusline/claude_usage_calc.py -v
-
-# Check cache
-cat ~/.claude/usage_cache.json | jq .
-
-# Check daemon logs
-tail -f ~/.claude/calc_daemon.log
-```
+### Percentages differ slightly from web UI
+Both should match exactly since they use the same server-side data. Small timing differences are possible since the status line reads the data at a slightly different moment.
 
 ## Uninstallation
 
@@ -286,11 +142,8 @@ tail -f ~/.claude/calc_daemon.log
 ```
 
 Or manually:
-
 ```bash
 rm -rf ~/.claude/statusline
-rm -f ~/.claude/usage_cache.json
-rm -f ~/.claude/calc_daemon.log
 # Remove statusLine from ~/.claude/settings.json
 ```
 
@@ -298,16 +151,13 @@ rm -f ~/.claude/calc_daemon.log
 
 | File | Purpose |
 |------|---------|
-| `statusline.sh` | Main entry point, configured in settings.json |
-| `statusline_display.sh` | Renders the actual status bar with colors |
-| `claude_usage_calc.py` | Parses JSONL files, calculates metrics |
-| `calc_daemon.sh` | Background runner for the calculator |
-| `setup.sh` | Installation script |
-| `usage_cache.json` | Cached metrics (auto-generated) |
+| `statusline.sh` | Entry point, pipes stdin to display script |
+| `statusline_display.sh` | Renders ANSI-colored status bar |
+| `setup.sh` | Installation/uninstallation script |
 
 ## License
 
-MIT License - feel free to modify and share.
+MIT License — feel free to modify and share.
 
 ## Credits
 
