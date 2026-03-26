@@ -57,9 +57,6 @@ BG_RED='\033[48;5;52m'
 SEP="${FG_GRAY}│${RST}"
 SEP_LIGHT="${DIM}·${RST}"
 
-# Cache file location
-CACHE_FILE="${HOME}/.claude/usage_cache.json"
-
 # ============================================================================
 # Helper Functions
 # ============================================================================
@@ -212,12 +209,6 @@ main() {
     local stdin_json
     stdin_json=$(read_stdin_json)
     
-    # Read cache file if exists
-    local cache_json="{}"
-    if [[ -f "$CACHE_FILE" ]]; then
-        cache_json=$(cat "$CACHE_FILE" 2>/dev/null || echo "{}")
-    fi
-    
     # ========================================================================
     # Extract data from Claude Code's stdin
     # ========================================================================
@@ -261,74 +252,35 @@ main() {
     [[ "$context_pct" == "null" ]] && context_pct=0
     
     # ========================================================================
-    # Extract data from calculator cache
+    # Rate limits from Claude Code's stdin (authoritative server-side data)
     # ========================================================================
-    
-    # 5-hour window data
-    local window_tokens window_input window_output window_pct
-    local window_remaining window_reset_ts window_active
-    
-    window_input=$(jq_safe "$cache_json" '.current_window.usage.input_tokens' '0')
-    window_output=$(jq_safe "$cache_json" '.current_window.usage.output_tokens' '0')
-    window_tokens=$(jq_safe "$cache_json" '.current_window.usage.total_tokens' '0')
-    window_remaining=$(jq_safe "$cache_json" '.current_window.seconds_remaining' '0')
-    window_reset_ts=$(jq_safe "$cache_json" '.current_window.reset_timestamp' '')
-    window_active=$(jq_safe "$cache_json" '.current_window.is_active' 'false')
-    
-    [[ "$window_input" == "null" ]] && window_input=0
-    [[ "$window_output" == "null" ]] && window_output=0
-    [[ "$window_tokens" == "null" ]] && window_tokens=0
-    [[ "$window_remaining" == "null" ]] && window_remaining=0
-    
-    # Weekly data
-    local weekly_tokens weekly_remaining weekly_reset_ts weekly_pct
-    weekly_tokens=$(jq_safe "$cache_json" '.weekly.usage.total_tokens' '0')
-    weekly_remaining=$(jq_safe "$cache_json" '.weekly.seconds_remaining' '0')
-    weekly_reset_ts=$(jq_safe "$cache_json" '.weekly.reset_timestamp' '')
-    
-    [[ "$weekly_tokens" == "null" ]] && weekly_tokens=0
-    [[ "$weekly_remaining" == "null" ]] && weekly_remaining=0
-    
-    # ========================================================================
-    # Calculate percentages
-    # ========================================================================
-    
-    # For window percentage, we estimate based on typical limits
-    # Claude Max5 has ~X million tokens per 5hr window
-    # We'll estimate dynamically based on observed usage patterns
-    # For now, use a reasonable estimate or calculate from usage rate
-    
-    # Estimate window limit: 
-    # - Pro: ~400K tokens/5hr window
-    # - Max5: ~10M tokens/5hr window
-    # - Max20: ~40M tokens/5hr window
-    # We'll auto-detect based on model name
-    local window_limit=400000  # Default Pro estimate
-    
-    if [[ "$model_id" == *"opus"* ]]; then
-        window_limit=150000  # Opus has lower limits
-    elif [[ "$model_name" == *"Max"* ]] || [[ "$model_id" == *"max"* ]]; then
-        window_limit=10000000  # Max plan estimate
+
+    local window_pct window_reset_ts window_active
+    local weekly_pct weekly_reset_ts
+
+    # Read directly from stdin JSON — no estimation needed
+    window_pct=$(jq_safe "$stdin_json" '.rate_limits.five_hour.used_percentage' '')
+    window_reset_ts=$(jq_safe "$stdin_json" '.rate_limits.five_hour.resets_at' '')
+    weekly_pct=$(jq_safe "$stdin_json" '.rate_limits.seven_day.used_percentage' '')
+    weekly_reset_ts=$(jq_safe "$stdin_json" '.rate_limits.seven_day.resets_at' '')
+
+    # Calculate time remaining from reset timestamp
+    local window_remaining=0
+    if [[ -n "$window_reset_ts" && "$window_reset_ts" != "null" ]]; then
+        local now_ts
+        now_ts=$(date +%s)
+        window_remaining=$(( window_reset_ts - now_ts ))
+        (( window_remaining < 0 )) && window_remaining=0
+        window_active="true"
+    else
+        window_active="false"
     fi
-    
-    # Calculate window percentage
-    window_pct=0
-    if (( window_limit > 0 )); then
-        window_pct=$(( window_tokens * 100 / window_limit ))
-        (( window_pct > 100 )) && window_pct=100
-    fi
-    
-    # Weekly limit estimate (roughly 7x daily, ~3M tokens for Pro)
-    local weekly_limit=3000000
-    if [[ "$model_name" == *"Max"* ]] || [[ "$model_id" == *"max"* ]]; then
-        weekly_limit=50000000
-    fi
-    
-    weekly_pct=0
-    if (( weekly_limit > 0 )); then
-        weekly_pct=$(( weekly_tokens * 100 / weekly_limit ))
-        (( weekly_pct > 100 )) && weekly_pct=100
-    fi
+
+    # Truncate percentage to integer
+    [[ -z "$window_pct" || "$window_pct" == "null" ]] && window_pct=0
+    window_pct=${window_pct%%.*}
+    [[ -z "$weekly_pct" || "$weekly_pct" == "null" ]] && weekly_pct=0
+    weekly_pct=${weekly_pct%%.*}
     
     # ========================================================================
     # Build output line
